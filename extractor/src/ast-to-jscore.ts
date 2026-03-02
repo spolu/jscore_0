@@ -962,6 +962,7 @@ function flatChildren(node: Node): Node[] {
   return result;
 }
 
+
 function isTypeNode(node: Node): boolean {
   const kind = node.getKind();
   return (

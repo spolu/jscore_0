@@ -73,7 +73,8 @@ export function extractFile(
     const leanSource = emitLeanFile(name, expr, params, theorems);
 
     // Write to output
-    const outPath = path.join(outputDir, `${name}.lean`);
+    const pascalName = name[0].toUpperCase() + name.slice(1);
+    const outPath = path.join(outputDir, `${pascalName}.lean`);
     fs.mkdirSync(outputDir, { recursive: true });
     fs.writeFileSync(outPath, leanSource);
 

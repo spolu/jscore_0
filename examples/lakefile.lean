@@ -1,0 +1,18 @@
+import Lake
+open Lake DSL
+
+package examples where
+  leanOptions := #[
+    ⟨`autoImplicit, false⟩
+  ]
+
+require jscore from ".." / "jscore"
+
+@[default_target]
+lean_lib ExportWorkspaceData
+
+@[default_target]
+lean_lib ReorderTasks
+
+@[default_target]
+lean_lib RotateApiKey

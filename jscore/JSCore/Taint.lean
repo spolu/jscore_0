@@ -8,11 +8,13 @@ namespace JSCore
 
 -- Pattern matching (duplicated from Trace to avoid circular imports)
 private def matchesPat (target : String) (pattern : String) : Bool :=
-  if pattern.endsWith "*" then
-    let pfx := pattern.dropRight 1
-    target.startsWith pfx
-  else
-    target == pattern
+  go (target.splitOn ".") (pattern.splitOn ".")
+where
+  go : List String → List String → Bool
+  | _ :: _, ["*"] => true
+  | t :: ts, p :: ps => (p == "*" || t == p) && go ts ps
+  | [], [] => true
+  | _, _ => false
 
 -- Free variables of an expression.
 -- Uses well-founded recursion with sizeOf.

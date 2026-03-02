@@ -4,12 +4,15 @@ interface Auth {
   userId: string;
 }
 
-interface DbQuery {
-  where: { workspaceId: string };
-}
-
-declare function dbProjectsFindMany(query: DbQuery): Promise<any[]>;
-declare function dbTasksFindMany(query: DbQuery): Promise<any[]>;
+// External API namespaces (dotted calls)
+declare const db: {
+  projects: {
+    findMany(query: { where: { workspaceId: string } }): Promise<any[]>;
+  };
+  tasks: {
+    findMany(query: { where: { workspaceId: string } }): Promise<any[]>;
+  };
+};
 
 // @requires auth.workspaceId > 0
 // @invariant ws-isolation: ∀ call db.* (c) => c.where.workspaceId = auth.workspaceId
@@ -17,11 +20,11 @@ declare function dbTasksFindMany(query: DbQuery): Promise<any[]>;
 // @invariant read-only: ¬ ∃ call db.*.create
 // @invariant read-only: ¬ ∃ call db.*.delete
 async function exportWorkspaceData(auth: Auth, format: string) {
-  const projects = await dbProjectsFindMany({
+  const projects = await db.projects.findMany({
     where: { workspaceId: auth.workspaceId },
   });
 
-  const tasks = await dbTasksFindMany({
+  const tasks = await db.tasks.findMany({
     where: { workspaceId: auth.workspaceId },
   });
 

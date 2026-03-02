@@ -207,7 +207,7 @@ export function emitLeanFile(
   lines.push("import JSCore.Taint");
   lines.push("import JSCore.Tactics");
   lines.push("");
-  lines.push("namespace JSCore");
+  lines.push("open JSCore");
   lines.push("");
 
   // Emit the definition
@@ -221,7 +221,7 @@ export function emitLeanFile(
     lines.push("");
   }
 
-  lines.push("end JSCore");
+  // no end needed with open
 
   return lines.join("\n");
 }

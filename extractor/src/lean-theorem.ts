@@ -1,10 +1,18 @@
 /**
  * Lean Theorem Generator — Annotations → theorem statements.
- * For each @invariant: generate `theorem fn_tag ... := by sorry`
- * @requires → hypotheses, @ensures → nested under ∃ fields with TS type predicate
+ *
+ * Three invariant shapes:
+ *   1. ¬ tainted X in call P  → notTaintedIn body "X" "P" = true       (native_decide)
+ *   2. ¬ ∃ call P             → (callExprsIn body "P").length = 0       (native_decide)
+ *   3. ∀ call P (c) => pred   → runtime trace property                  (sorry)
  */
 
 import { RequiresAnnotation, InvariantAnnotation } from "./annotation-parser";
+
+interface InvariantTranslation {
+  conclusion: string;
+  needsRuntime: boolean;
+}
 
 /**
  * Generate a Lean theorem statement from an invariant annotation.
@@ -17,39 +25,38 @@ export function generateTheorem(
   tagIndex: number = 0
 ): string {
   const tag = sanitizeTag(invariant.tag);
-  const thmName = tagIndex > 0 ? `${functionName}_${tag}_${tagIndex}` : `${functionName}_${tag}`;
+  const thmName =
+    tagIndex > 0 ? `${functionName}_${tag}_${tagIndex}` : `${functionName}_${tag}`;
 
-  const lines: string[] = [];
-  lines.push(`theorem ${thmName}`);
-
-  // Universal quantifiers for fuel and params
-  lines.push(`    (fuel : Nat)`);
-  for (const param of params) {
-    lines.push(`    (${param} : Val)`);
-  }
-
-  // Build env from params
-  lines.push(`    (env : Env)`);
-  lines.push(`    (store : Store)`);
-
-  // @requires become hypotheses
-  for (let i = 0; i < requires.length; i++) {
-    const req = requires[i];
-    const leanProp = translatePropertyToLean(req.prop, params);
-    lines.push(`    (h_req_${i} : ${leanProp})`);
-  }
-
-  // The env binds all params
-  const envSetup = params
-    .map((p) => `env.set "${p}" ${p}`)
-    .reduceRight((acc, set) => `(${set} |> fun e => ${acc})`, "env");
-
-  // Generate the conclusion based on the invariant property
-  const conclusion = translateInvariantToLean(
+  const { conclusion, needsRuntime } = translateInvariantToLean(
     invariant.prop,
     functionName,
     params
   );
+
+  if (!needsRuntime) {
+    // Purely syntactic theorem — no fuel/env/store/params needed
+    return [
+      `theorem ${thmName}`,
+      `    : ${conclusion} := by`,
+      `  native_decide`,
+    ].join("\n");
+  }
+
+  // Runtime theorem — needs fuel, env, store, params, env bindings
+  const lines: string[] = [];
+  lines.push(`theorem ${thmName}`);
+  lines.push(`    (fuel : Nat)`);
+  for (const param of params) {
+    lines.push(`    (${param} : Val)`);
+  }
+  lines.push(`    (env : Env)`);
+  lines.push(`    (store : Store)`);
+
+  // Env binding hypotheses: env "param" = some param
+  for (const param of params) {
+    lines.push(`    (h_env_${param} : env "${param}" = some ${param})`);
+  }
 
   lines.push(`    : ${conclusion} := by`);
   lines.push(`  sorry`);
@@ -58,92 +65,54 @@ export function generateTheorem(
 }
 
 /**
- * Translate a property from the annotation grammar to Lean.
- */
-function translatePropertyToLean(prop: string, params: string[]): string {
-  // Simple translations
-  prop = prop.trim();
-
-  // x > 0 → (∃ n, x = Val.num n ∧ n > 0)
-  const compMatch = prop.match(
-    /^(\w+(?:\.\w+)*)\s*(>|<|≥|≤|=|≠)\s*(.+)$/
-  );
-  if (compMatch) {
-    const [, left, op, right] = compMatch;
-    const leanOp = translateOp(op);
-
-    // Check if comparing to a number
-    if (/^\d+$/.test(right.trim())) {
-      return `∃ n, ${translateAccess(left, params)} = some (Val.num n) ∧ n ${leanOp} ${right.trim()}`;
-    }
-
-    // Comparing two params
-    return `${translateAccess(left, params)} ${leanOp} ${translateAccess(right.trim(), params)}`;
-  }
-
-  // x ∈ [values]
-  const memMatch = prop.match(/^(\w+(?:\.\w+)*)\s*∈\s*\[(.+)\]$/);
-  if (memMatch) {
-    const [, varName, values] = memMatch;
-    const valList = values.split(",").map((v) => v.trim());
-    const leanVals = valList
-      .map((v) => {
-        if (v.startsWith('"') && v.endsWith('"')) {
-          return `Val.str ${v}`;
-        }
-        return `Val.str "${v}"`;
-      })
-      .join(", ");
-    return `Val.mem' (${translateAccess(varName, params)}) [${leanVals}]`;
-  }
-
-  // x starts_with y
-  const swMatch = prop.match(
-    /^(\w+(?:\.\w+)*)\s+starts_with\s+(.+)$/
-  );
-  if (swMatch) {
-    const [, left, right] = swMatch;
-    return `Val.startsWith' (${translateAccess(left, params)}) (${translateAccess(right.trim(), params)})`;
-  }
-
-  // Fallback: return as comment
-  return `True /- TODO: ${prop} -/`;
-}
-
-/**
  * Translate an invariant proposition to a Lean conclusion.
+ * Returns the conclusion string and whether it needs runtime (eval) reasoning.
  */
 function translateInvariantToLean(
   prop: string,
   functionName: string,
   params: string[]
-): string {
+): InvariantTranslation {
   prop = prop.trim();
 
-  // ∀ call <pattern> (c) => <pred>
-  const forallMatch = prop.match(/^∀\s+call\s+(\S+)\s+\((\w+)\)\s*=>\s*(.+)$/s);
-  if (forallMatch) {
-    const [, pattern, bindVar, pred] = forallMatch;
-    return `∀ ${bindVar} ∈ callsTo (eval fuel env store ${functionName}_body).trace "${pattern}",\n      ${translateCallPred(pred.trim(), bindVar, params)}`;
-  }
-
-  // ¬ ∃ call <pattern>
-  const noCallMatch = prop.match(/^¬\s*∃\s+call\s+(\S+)/);
-  if (noCallMatch) {
-    const [, pattern] = noCallMatch;
-    return `callsTo (eval fuel env store ${functionName}_body).trace "${pattern}" = []`;
-  }
-
-  // ¬ tainted <binding> in call <pattern>
+  // ¬ tainted <binding> in call <pattern> → purely syntactic
   const taintMatch = prop.match(
     /^¬\s*tainted\s+(\w+)\s+in\s+call\s+(\S+)/
   );
   if (taintMatch) {
     const [, source, pattern] = taintMatch;
-    return `notTaintedIn ${functionName}_body "${source}" "${pattern}" = true`;
+    return {
+      conclusion: `notTaintedIn ${functionName}_body "${source}" "${pattern}" = true`,
+      needsRuntime: false,
+    };
   }
 
-  return `True /- TODO: ${prop} -/`;
+  // ¬ ∃ call <pattern> → purely syntactic (no matching call sites in AST)
+  const noCallMatch = prop.match(/^¬\s*∃\s+call\s+(\S+)/);
+  if (noCallMatch) {
+    const [, pattern] = noCallMatch;
+    return {
+      conclusion: `(callExprsIn ${functionName}_body "${pattern}").length = 0`,
+      needsRuntime: false,
+    };
+  }
+
+  // ∀ call <pattern> (c) => <pred> → runtime trace property
+  const forallMatch = prop.match(
+    /^∀\s+call\s+(\S+)\s+\((\w+)\)\s*=>\s*(.+)$/s
+  );
+  if (forallMatch) {
+    const [, pattern, bindVar, pred] = forallMatch;
+    return {
+      conclusion: `∀ ${bindVar} ∈ callsTo (eval fuel env store ${functionName}_body).trace "${pattern}",\n      ${translateCallPred(pred.trim(), bindVar, params)}`,
+      needsRuntime: true,
+    };
+  }
+
+  return {
+    conclusion: `True /- TODO: ${prop} -/`,
+    needsRuntime: true,
+  };
 }
 
 function translateCallPred(
@@ -163,7 +132,7 @@ function translateCallPred(
       : translateAccess(left, params);
     const leanRight = right.startsWith(callVar + ".")
       ? `argAtPath ${callVar} "${right.slice(callVar.length + 1)}"`
-      : `some ${translateAccess(right, params)}`;
+      : translateAccessAsOption(right, params);
     return `${leanLeft} ${leanOp} ${leanRight}`;
   }
 
@@ -178,28 +147,31 @@ function translateAccess(path: string, params: string[]): string {
     }
     return `Val.str "${parts[0]}"`;
   }
-
-  // a.b.c → field access
   return parts[0];
 }
 
-function translateOp(op: string): string {
-  switch (op) {
-    case ">":
-      return ">";
-    case "<":
-      return "<";
-    case "≥":
-      return "≥";
-    case "≤":
-      return "≤";
-    case "=":
-      return "=";
-    case "≠":
-      return "≠";
-    default:
-      return "=";
+/**
+ * Translate a dotted access to an Option Val expression.
+ * auth.workspaceId → Val.field' auth "workspaceId"
+ * For simple params, wraps in `some`.
+ */
+function translateAccessAsOption(path: string, params: string[]): string {
+  const parts = path.split(".");
+  if (parts.length === 1) {
+    if (params.includes(parts[0])) {
+      return `some ${parts[0]}`;
+    }
+    return `some (Val.str "${parts[0]}")`;
   }
+
+  // a.b → field access on a Val
+  const base = parts[0];
+  const fieldPath = parts.slice(1);
+  if (fieldPath.length === 1) {
+    return `Val.field' ${base} "${fieldPath[0]}"`;
+  }
+  // Multi-level: chain field accesses
+  return `Val.field' ${base} "${fieldPath.join(".")}"`;
 }
 
 function sanitizeTag(tag: string): string {

@@ -1,0 +1,12 @@
+{"version": "1.1.0",
+ "packagesDir": ".lake/packages",
+ "packages":
+ [{"type": "path",
+   "scope": "",
+   "name": "jscore",
+   "manifestFile": "lake-manifest.json",
+   "inherited": false,
+   "dir": "./../jscore",
+   "configFile": "lakefile.lean"}],
+ "name": "examples",
+ "lakeDir": ".lake"}

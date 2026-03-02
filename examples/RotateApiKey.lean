@@ -6,10 +6,10 @@ import JSCore.Properties
 import JSCore.Taint
 import JSCore.Tactics
 
-namespace JSCore
+open JSCore
 
 def rotateApiKey_body : Expr :=
-  (.call "dbApiKeyFindUnique"
+  (.call "db.apiKey.findUnique"
     [("where", (.obj [
   ("id", (.var "keyId")),
   ("workspaceId", (.field
@@ -24,26 +24,18 @@ def rotateApiKey_body : Expr :=
       (.call "generateKey"
         []
         "newKey"
-        (.call "dbApiKeyUpdate"
+        (.call "db.apiKey.update"
           [("where", (.obj [
   ("id", (.var "keyId"))
 ])), ("data", (.obj [
   ("key", (.var "newKey"))
 ]))]
           "__void_0"
-          (.call "loggerInfo"
+          (.call "logger.info"
             [("arg0", (.strLit "API key rotated successfully"))]
             "__void_1"
             Expr.none)))))
 
 theorem rotateApiKey_no_secret_leak
-    (fuel : Nat)
-    (auth : Val)
-    (keyId : Val)
-    (env : Env)
-    (store : Store)
-    (h_req_0 : ∃ n, auth = some (Val.num n) ∧ n > 0)
     : notTaintedIn rotateApiKey_body "apiKey" "logger.*" = true := by
-  sorry
-
-end JSCore
+  native_decide

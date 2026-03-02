@@ -35,13 +35,17 @@ def extractCalls (trace : List TraceEntry) : List CallRecord :=
     | .call cr => some cr
     | .scopeEnd _ => Option.none
 
--- Does target match pattern? Pattern "db.*" matches any target starting with "db."
+-- Does target match pattern? Segments are split on ".".
+-- "*" matches any single segment; trailing "*" matches 1+ remaining segments.
+-- Examples: "db.projects.findMany" matches "db.*" and "db.*.findMany" but not "db.*.update"
 def matchesPattern (target : String) (pattern : String) : Bool :=
-  if pattern.endsWith "*" then
-    let pfx := pattern.dropRight 1
-    target.startsWith pfx
-  else
-    target == pattern
+  go (target.splitOn ".") (pattern.splitOn ".")
+where
+  go : List String → List String → Bool
+  | _ :: _, ["*"] => true
+  | t :: ts, p :: ps => (p == "*" || t == p) && go ts ps
+  | [], [] => true
+  | _, _ => false
 
 -- All calls whose target matches the pattern
 def callsTo (trace : List TraceEntry) (pattern : String) : List CallRecord :=

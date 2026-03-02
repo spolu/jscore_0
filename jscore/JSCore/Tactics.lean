@@ -19,7 +19,8 @@ macro "trace_simp" : tactic =>
   `(tactic| (
     simp only [eval, evalBinOp, evalUnOp, evalForOf, evalWhileAux,
                mkResult, lookup, Env.set, Store.set, fieldLookup, fieldSet,
-               emptyEnv, emptyStore, matchesPattern, callsTo, extractCalls,
+               emptyEnv, emptyStore, matchesPattern, matchesPattern.go,
+               callsTo, extractCalls,
                argLookup, argAtPath,
                Val.startsWith', Val.mem', Val.contains',
                List.foldl, List.filter, List.filterMap, List.map, List.append,
@@ -42,7 +43,7 @@ macro "by_taint" : tactic =>
     simp only [notTaintedIn, callExprsIn, callExprsInPairs, taintedBy, freeVars,
                freeVarsPairs, freeVarsList,
                collectTaintedBindings, collectTaintedBindingsPairs,
-               matchesPat,
+               matchesPat, matchesPat.go,
                List.all, List.any, List.flatMap, List.filter, List.map,
                List.elem, List.append,
                String.startsWith, String.isPrefixOf,

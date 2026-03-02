@@ -117,4 +117,10 @@ def fieldSet (fields : List (String × Val)) (key : String) (v : Val) : List (St
   else
     fields ++ [(key, v)]
 
+-- Field access on a Val (returns Option Val)
+def Val.field' (v : Val) (name : String) : Option Val :=
+  match v with
+  | .obj fields => fieldLookup fields name
+  | _ => Option.none
+
 end JSCore
