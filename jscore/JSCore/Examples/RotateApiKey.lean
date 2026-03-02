@@ -6,8 +6,6 @@ import JSCore.Properties
 import JSCore.Taint
 import JSCore.Tactics
 
-set_option linter.sorryIn false
-
 namespace JSCore
 
 def rotateApiKey_body : Expr :=

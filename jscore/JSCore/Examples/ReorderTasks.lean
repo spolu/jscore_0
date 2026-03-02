@@ -5,8 +5,6 @@ import JSCore.Trace
 import JSCore.Properties
 import JSCore.Tactics
 
-set_option linter.sorryIn false
-
 namespace JSCore
 
 def reorderTasks_body : Expr :=

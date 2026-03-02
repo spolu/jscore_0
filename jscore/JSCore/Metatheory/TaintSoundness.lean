@@ -5,8 +5,6 @@
 import JSCore.Eval
 import JSCore.Taint
 
-set_option linter.sorryIn false
-
 namespace JSCore
 
 -- Helper: if an expression's free variables don't contain source,

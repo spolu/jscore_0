@@ -25,8 +25,7 @@ def notMutatedIn (x : String) : Expr → Prop
   | _ => True
 
 -- Env lookup is stable across different stores when x is not in store
-theorem env_stable (env : Env) (store store' : Store) (x : String) (v : Val)
-    (_h_env : env x = some v)
+theorem env_stable (env : Env) (store store' : Store) (x : String)
     (h_not_in_store : store x = .none)
     (h_not_in_store' : store' x = .none) :
     lookup env store x = lookup env store' x := by

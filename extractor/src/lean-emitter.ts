@@ -207,8 +207,6 @@ export function emitLeanFile(
   lines.push("import JSCore.Taint");
   lines.push("import JSCore.Tactics");
   lines.push("");
-  lines.push("set_option linter.sorryIn false");
-  lines.push("");
   lines.push("namespace JSCore");
   lines.push("");
 
