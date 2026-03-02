@@ -1,0 +1,167 @@
+/**
+ * Pipeline orchestration — coordinates extraction from TS source to Lean files.
+ */
+
+import { Project, SourceFile, SyntaxKind, FunctionDeclaration, Node } from "ts-morph";
+import { extractFunction, JsCoreExpr } from "./ast-to-jscore";
+import { emitLean, emitLeanFile } from "./lean-emitter";
+import {
+  parseAnnotations,
+  extractFunctionAnnotations,
+  RequiresAnnotation,
+  InvariantAnnotation,
+} from "./annotation-parser";
+import { generateTheorem } from "./lean-theorem";
+import * as fs from "fs";
+import * as path from "path";
+
+export interface ExtractionResult {
+  functionName: string;
+  leanSource: string;
+  hasSorry: boolean;
+  invariantCount: number;
+  requiresCount: number;
+}
+
+/**
+ * Extract all annotated functions from a TypeScript source file.
+ */
+export function extractFile(
+  filePath: string,
+  project: Project,
+  outputDir: string
+): ExtractionResult[] {
+  const sourceFile = project.addSourceFileAtPath(filePath);
+  const checker = project.getTypeChecker();
+  const results: ExtractionResult[] = [];
+
+  // Find all function declarations with annotations
+  const functions = sourceFile.getFunctions();
+
+  for (const func of functions) {
+    const name = func.getName();
+    if (!name) continue;
+
+    // Get leading comments for annotations
+    const commentRanges = func.getLeadingCommentRanges();
+    const comments = commentRanges.map((r) => r.getText());
+
+    const { requires: reqs, invariants: invs } =
+      extractFunctionAnnotations(comments);
+
+    // Skip functions with no annotations
+    if (reqs.length === 0 && invs.length === 0) continue;
+
+    // Extract the function body
+    const expr = extractFunction(func, checker);
+
+    // Check for sorry
+    const hasSorry = containsSorry(expr);
+
+    // Get parameter names
+    const params = func.getParameters().map((p) => p.getName());
+
+    // Generate theorems (with index to disambiguate duplicate tags)
+    const tagCounts = new Map<string, number>();
+    const theorems = invs.map((inv) => {
+      const count = tagCounts.get(inv.tag) ?? 0;
+      tagCounts.set(inv.tag, count + 1);
+      return generateTheorem(name, inv, reqs, params, count);
+    });
+
+    // Emit Lean file
+    const leanSource = emitLeanFile(name, expr, params, theorems);
+
+    // Write to output
+    const outPath = path.join(outputDir, `${name}.lean`);
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(outPath, leanSource);
+
+    results.push({
+      functionName: name,
+      leanSource,
+      hasSorry,
+      invariantCount: invs.length,
+      requiresCount: reqs.length,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Extract all TypeScript files in a list.
+ */
+export function extractFiles(
+  filePaths: string[],
+  outputDir: string,
+  tsConfigPath?: string
+): ExtractionResult[] {
+  const project = new Project({
+    tsConfigFilePath: tsConfigPath,
+    skipAddingFilesFromTsConfig: true,
+  });
+
+  const allResults: ExtractionResult[] = [];
+
+  for (const filePath of filePaths) {
+    const results = extractFile(filePath, project, outputDir);
+    allResults.push(...results);
+  }
+
+  return allResults;
+}
+
+function containsSorry(expr: JsCoreExpr): boolean {
+  if (expr.tag === "sorry") return true;
+
+  switch (expr.tag) {
+    case "letConst":
+    case "letMut":
+    case "assign":
+      return containsSorry(expr.value) || containsSorry(expr.body);
+    case "seq":
+      return containsSorry(expr.first) || containsSorry(expr.second);
+    case "ite":
+      return (
+        containsSorry(expr.cond) ||
+        containsSorry(expr.then) ||
+        containsSorry(expr.else)
+      );
+    case "forOf":
+      return containsSorry(expr.arr) || containsSorry(expr.body);
+    case "whileLoop":
+      return containsSorry(expr.cond) || containsSorry(expr.body);
+    case "call":
+      return (
+        expr.args.some(([, v]) => containsSorry(v)) ||
+        containsSorry(expr.body)
+      );
+    case "tryCatch":
+      return containsSorry(expr.body) || containsSorry(expr.handler);
+    case "ret":
+    case "throw":
+      return containsSorry(expr.value);
+    case "field":
+      return containsSorry(expr.expr);
+    case "index":
+      return containsSorry(expr.expr) || containsSorry(expr.idx);
+    case "push":
+      return containsSorry(expr.value);
+    case "obj":
+      return expr.fields.some(([, v]) => containsSorry(v));
+    case "spread":
+      return (
+        containsSorry(expr.base) ||
+        expr.overrides.some(([, v]) => containsSorry(v))
+      );
+    case "arr":
+      return expr.elements.some(containsSorry);
+    case "binOp":
+      return containsSorry(expr.left) || containsSorry(expr.right);
+    case "unOp":
+      return containsSorry(expr.operand);
+    default:
+      return false;
+  }
+}

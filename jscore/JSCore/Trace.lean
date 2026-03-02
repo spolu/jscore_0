@@ -1,0 +1,80 @@
+/-
+  JSCore₀ Trace — CallRecord, TraceEntry, Outcome, Result, and trace queries.
+-/
+import JSCore.Values
+
+namespace JSCore
+
+structure CallRecord where
+  target   : String
+  args     : List (String × Val)
+  resultId : String
+  deriving Repr, BEq, DecidableEq
+
+inductive TraceEntry where
+  | call     : CallRecord → TraceEntry
+  | scopeEnd : CallRecord → TraceEntry
+  deriving Repr, BEq, DecidableEq
+
+inductive Outcome where
+  | ok       : Val → Outcome
+  | error    : Val → Outcome
+  | brk      : Outcome
+  | returned : Val → Outcome
+  deriving Repr, BEq
+
+structure Result where
+  outcome : Outcome
+  store   : Store
+  trace   : List TraceEntry
+
+-- Extract CallRecords from trace (only .call entries)
+def extractCalls (trace : List TraceEntry) : List CallRecord :=
+  trace.filterMap fun e =>
+    match e with
+    | .call cr => some cr
+    | .scopeEnd _ => Option.none
+
+-- Does target match pattern? Pattern "db.*" matches any target starting with "db."
+def matchesPattern (target : String) (pattern : String) : Bool :=
+  if pattern.endsWith "*" then
+    let pfx := pattern.dropRight 1
+    target.startsWith pfx
+  else
+    target == pattern
+
+-- All calls whose target matches the pattern
+def callsTo (trace : List TraceEntry) (pattern : String) : List CallRecord :=
+  (extractCalls trace).filter (fun c => matchesPattern c.target pattern)
+
+-- Value of a named argument (supports simple top-level lookup)
+def argLookup (args : List (String × Val)) (name : String) : Option Val :=
+  fieldLookup args name
+
+-- Value at a dotted path like "where.workspaceId"
+def argAtPath (c : CallRecord) (path : String) : Option Val :=
+  let parts := path.splitOn "."
+  match parts with
+  | [] => Option.none
+  | [name] => argLookup c.args name
+  | name :: rest =>
+    match argLookup c.args name with
+    | some v => rest.foldl (fun acc part =>
+        match acc with
+        | some (.obj fields) => fieldLookup fields part
+        | _ => Option.none) (some v)
+    | Option.none => Option.none
+
+-- Ordering: c1 appears before c2 in the trace
+def before (trace : List TraceEntry) (c1 c2 : CallRecord) : Prop :=
+  ∃ i j, trace.get? i = some (.call c1) ∧ trace.get? j = some (.call c2) ∧ i < j
+
+-- c1 occurs inside the scope of a transaction call c2
+def inside (trace : List TraceEntry) (c1 c2 : CallRecord) : Prop :=
+  matchesPattern c2.target "db.$transaction*" ∧
+  ∃ i j k, trace.get? i = some (.call c2) ∧
+    trace.get? j = some (.call c1) ∧
+    trace.get? k = some (.scopeEnd c2) ∧
+    i < j ∧ j < k
+
+end JSCore

@@ -1,0 +1,22 @@
+{
+  "name": "jscore-extractor",
+  "version": "0.1.0",
+  "description": "TypeScript to JSCore₀ extractor",
+  "main": "dist/index.js",
+  "bin": {
+    "jscore": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "extract": "ts-node src/index.ts extract",
+    "verify": "ts-node src/index.ts verify",
+    "coverage": "ts-node src/index.ts coverage"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.3",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "ts-morph": "^25.0.0"
+  }
+}
