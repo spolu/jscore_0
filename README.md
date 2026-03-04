@@ -172,7 +172,7 @@ Requires: Lean 4 v4.16.0 (via elan), Node.js, TypeScript.
 ## Architecture
 
 ```
-jscore/JSCore/          Lean 4 formalism (~2,870 LOC)
+jscore/JSCore/          Lean 4 formalism (~1,600 LOC)
   Syntax.lean           26-constructor Expr type (CPS-style calls)
   Values.lean           Val (str/num/bool/none/obj/arr), Env, Store
   Eval.lean             fuel-bounded evaluator, structural recursion
@@ -181,7 +181,7 @@ jscore/JSCore/          Lean 4 formalism (~2,870 LOC)
   Metatheory/           equation lemmas, trace composition, loop invariants, taint soundness
   Tactics.lean          trace_simp, by_taint, by_ordering
 
-extractor/src/          TypeScript extractor (~1,000 LOC)
+extractor/src/          TypeScript extractor (~2,900 LOC)
   ast-to-jscore.ts      ts-morph AST to JsCoreExpr (CPS translation)
   lean-emitter.ts       JsCoreExpr to Lean source text
   lean-theorem.ts       annotations to theorem statements
