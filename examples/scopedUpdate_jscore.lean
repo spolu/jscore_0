@@ -1,25 +1,15 @@
 import JSCore.Syntax
-
 import JSCore.Values
-
 import JSCore.Eval
-
 import JSCore.Trace
-
 import JSCore.Properties
-
 import JSCore.Taint
-
 import JSCore.Tactics
 
-
 import JSCore.Metatheory.EvalEq
-
 import JSCore.Metatheory.TraceComposition
 
-
 open JSCore
-
 
 def lookupProject_body : Expr :=
   (.call "db.project.findUnique"
@@ -32,7 +22,6 @@ def lookupProject_body : Expr :=
     "project"
     (.ret
       (.var "project")))
-
 
 private theorem argAtPath_where_wsId_2 (target resultId : String) (idVal wsVal : Val) :
     argAtPath { target := target,
@@ -65,7 +54,6 @@ private theorem eval_findUnique_arg (n : Nat) (env : Env) (store : Store)
   rw [eval_field_var h_env_auth h_store_auth h_fl (by omega)]
   simp only [mkResult_outcome, mkResult_store, mkResult_trace, List.nil_append, List.append_nil]
   rfl
-
 
 private theorem argAtPath_update_wsId (target resultId : String) (idVal wsVal : Val) :
     argAtPath { target := target,
@@ -144,7 +132,6 @@ private theorem eval_data_arg (n : Nat) (env : Env) (store : Store) (hn : n ≥ 
   rw [show n' + 2 = (n' + 1) + 1 from by omega, eval_strLit_eq]
   simp only [mkResult_outcome, mkResult_store, mkResult_trace, List.nil_append, List.append_nil]
 
-
 theorem lookupProject_ws_isolation
     (fuel : Nat)
     (auth : Val)
@@ -201,7 +188,6 @@ theorem lookupProject_ws_isolation
     rw [h_ret_trace, callsTo_nil] at h2
     exact List.not_mem_nil c h2
 
-
 theorem lookupProject_ws_isolation_canonical
     (fuel : Nat)
     (auth : Val)
@@ -219,8 +205,6 @@ theorem lookupProject_ws_isolation_canonical
     (by simp [emptyStore])
     (by simp [emptyStore])
     h_req_0 h_fuel c hc
-
-
 
 def scopedUpdate_body : Expr :=
   (.call "db.item.findUnique"
@@ -259,7 +243,6 @@ def scopedUpdate_body : Expr :=
             "__void_1"
             Expr.none))
         Expr.none)))
-
 
 theorem scopedUpdate_scoped_update
     (fuel : Nat)
@@ -396,4 +379,3 @@ theorem scopedUpdate_scoped_update
     exfalso
     rw [eval_none_trace, callsTo_nil] at h_rest
     exact List.not_mem_nil c h_rest
-

@@ -1,20 +1,12 @@
 import JSCore.Syntax
-
 import JSCore.Values
-
 import JSCore.Eval
-
 import JSCore.Trace
-
 import JSCore.Properties
-
 import JSCore.Taint
-
 import JSCore.Tactics
 
-
 open JSCore
-
 
 def rotateApiKey_body : Expr :=
   (.call "generateKey"
@@ -34,8 +26,6 @@ def rotateApiKey_body : Expr :=
         "__void_1"
         Expr.none)))
 
-
 theorem rotateApiKey_no_secret_leak
     : notTaintedIn rotateApiKey_body "apiKey" "logger.*" = true := by
   native_decide
-

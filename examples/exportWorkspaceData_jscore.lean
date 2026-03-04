@@ -1,25 +1,15 @@
 import JSCore.Syntax
-
 import JSCore.Values
-
 import JSCore.Eval
-
 import JSCore.Trace
-
 import JSCore.Properties
-
 import JSCore.Taint
-
 import JSCore.Tactics
 
-
 import JSCore.Metatheory.EvalEq
-
 import JSCore.Metatheory.TraceComposition
 
-
 open JSCore
-
 
 def exportWorkspaceData_body : Expr :=
   (.call "db.projects.findMany"
@@ -41,7 +31,6 @@ def exportWorkspaceData_body : Expr :=
           ("projects", (.var "projects")),
           ("tasks", (.var "tasks"))
         ]))))
-
 
 private theorem argAtPath_where_wsId (target : String) (resultId : String) (wsId : Val) :
     argAtPath { target := target,
@@ -160,7 +149,6 @@ theorem exportWorkspaceData_ws_isolation
       rw [h_no_calls] at h2b
       exact List.not_mem_nil c h2b
 
-
 theorem exportWorkspaceData_ws_isolation_canonical
     (fuel : Nat)
     (auth : Val)
@@ -179,18 +167,14 @@ theorem exportWorkspaceData_ws_isolation_canonical
     (by simp [emptyStore])
     h_req_0 h_fuel c hc
 
-
 theorem exportWorkspaceData_read_only
     : (callExprsIn exportWorkspaceData_body "db.*.update").length = 0 := by
   native_decide
-
 
 theorem exportWorkspaceData_read_only_1
     : (callExprsIn exportWorkspaceData_body "db.*.create").length = 0 := by
   native_decide
 
-
 theorem exportWorkspaceData_read_only_2
     : (callExprsIn exportWorkspaceData_body "db.*.delete").length = 0 := by
   native_decide
-

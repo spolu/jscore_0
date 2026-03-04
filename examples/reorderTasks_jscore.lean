@@ -1,27 +1,16 @@
 import JSCore.Syntax
-
 import JSCore.Values
-
 import JSCore.Eval
-
 import JSCore.Trace
-
 import JSCore.Properties
-
 import JSCore.Taint
-
 import JSCore.Tactics
 
-
 import JSCore.Metatheory.EvalEq
-
 import JSCore.Metatheory.TraceComposition
-
 import JSCore.Metatheory.ForOfCallsTo
 
-
 open JSCore
-
 
 def reorderTasks_body : Expr :=
   (.seq
@@ -37,7 +26,6 @@ def reorderTasks_body : Expr :=
         "__void_0"
         Expr.none))
     Expr.none)
-
 
 abbrev loop_body : Expr :=
   .call "db.task.update"
@@ -134,7 +122,6 @@ private theorem non_arr_no_calls (env : Env) (store : Store) (tasks : Val)
   | str _ | num _ | bool _ | none | obj _ =>
     simp only [callsTo, extractCalls, List.filterMap, List.filter]
 
-
 theorem reorderTasks_ws_isolation
     (fuel : Nat)
     (auth : Val)
@@ -178,4 +165,3 @@ theorem reorderTasks_ws_isolation
       rw [h_tasks]; intro elems; exact Val.noConfusion
     rw [non_arr_no_calls env store tasks h_store_tasks h_env_tasks h_not_arr] at hc
     exact absurd hc (List.not_mem_nil c)
-

@@ -139,10 +139,15 @@ export function mergeProofs(newSource: string, existingSource: string): string {
     if (nb.name) usedOldNames.add(nb.name);
   }
 
-  // Insert extra imports from old file right after the last new import
+  // Append extra imports from old file to the last new import block
   if (oldImports.length > 0 && lastImportIdx >= 0) {
-    const extraImportTexts = oldImports.map((b) => b.fullText);
-    resultBlocks.splice(lastImportIdx + 1, 0, ...extraImportTexts);
+    for (const oi of oldImports) {
+      // Extract just the import line (strip any trailing blank lines)
+      const importLine = oi.fullText.split("\n").find((l) => /^import\s/.test(l));
+      if (importLine) {
+        resultBlocks[lastImportIdx] += "\n" + importLine;
+      }
+    }
   }
 
   // Collect private helpers and abbrevs from old file that aren't in the new file
@@ -165,5 +170,23 @@ export function mergeProofs(newSource: string, existingSource: string): string {
     }
   }
 
-  return resultBlocks.join("\n\n") + "\n";
+  // Consolidate consecutive import lines into a single block
+  const consolidated: string[] = [];
+  for (const block of resultBlocks) {
+    if (/^import\s/.test(block)) {
+      // If previous consolidated entry is already an import group, append
+      if (consolidated.length > 0 && /^import\s/.test(consolidated[consolidated.length - 1])) {
+        consolidated[consolidated.length - 1] += "\n" + block;
+      } else {
+        consolidated.push(block);
+      }
+    } else {
+      consolidated.push(block);
+    }
+  }
+
+  // Trim each block and remove empty ones
+  const cleaned = consolidated.map((b) => b.trim()).filter((b) => b.length > 0);
+
+  return cleaned.join("\n\n") + "\n";
 }
