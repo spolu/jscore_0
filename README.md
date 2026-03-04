@@ -1,18 +1,73 @@
 # JSCore₀
 
-Annotated TypeScript to Lean 4 proofs. Agents write code and proofs, humans review one-line annotations, the Lean kernel checks everything.
+Annotated TypeScript to Lean 4 proofs. Agents write code and proofs, humans review annotations, the Lean kernel checks everything.
 
 ```
 annotated .ts  -->  extractor (ts-morph)  -->  Lean 4 AST + theorems  -->  lake build  -->  verified
 ```
 
-## Why
+## Motivation
 
-Agents produce code faster than humans can review it. JSCore₀ replaces code review with three lightweight comment annotations that capture what the code should do. The agent generates both the implementation and the proof. If the proof checks, the code matches the spec. If it doesn't, `lake build` fails. No human reads the implementation.
+The bottleneck has shifted. Models are increasingly capable. The deficiency is now human:
+
+- **Humans can't write formal specifications** from scratch, but they can approve a one-line constraint
+- **Humans can't review agent-generated code** at the scale and speed agents produce it
+- **Humans can't catch subtle behavioral regressions** across thousands of lines of changed implementation
+
+JSCore₀ inverts the usual flow: agents write code, proofs, and most invariants. Humans only specify what the code should do by collaborating with agents on annotations, and a mathematical kernel checks the proofs. The human's role is authoring intent and approving behavioral changes, not reading implementation.
 
 All proofs in `examples/` were generated entirely by coding agents (Claude). No human wrote Lean. Developers don't need to know anything about formal methods, Lean, or proof theory. They write TypeScript. The agent proposes annotations and proves them. The human reviews annotations, challenges them informally ("what about the case where..."), and iterates with the agent until the spec is right. The annotations follow a small formal grammar but are designed to be readable without training.
 
 This is a proof of concept. Taint and nonexistence proofs close instantly (`native_decide`), but runtime property proofs can take a coding agent up to an hour of iteration against the Lean kernel. Not practical yet, but the trajectory is clear: as models get better at Lean, the loop tightens. This project exists to demonstrate that the approach works end-to-end today, and that formal verification can apply to normal codebases without any formal methods expertise.
+
+## The three annotations
+
+Agents collaborate with humans on three types of comment annotations. `@requires` and `@invariant` go on function signatures; `@ensures` goes inline at call sites in the function body.
+
+```typescript
+// @requires amount > 0
+// @requires fromId ≠ toId
+// @invariant ws-isolation: ∀ call db.* (c) => c.where.workspaceId = auth.workspaceId
+// @invariant conservation: ∀ call db.account.update (u) =>
+//   sum(u.data.balance.increment) = 0
+async function transferCredits(
+  auth: Auth,
+  fromId: string,
+  toId: string,
+  amount: number,
+) {
+  const from = await db.account.findUnique({ where: { id: fromId } });
+  // @ensures from.balance ≥ amount
+
+  // ... implementation
+}
+```
+
+**`@requires`** - a precondition the caller must satisfy. Becomes a hypothesis in the proof. Not about where the check happens, but who is responsible.
+
+**`@invariant`** - a property proved over every execution of the function. The tag (`ws-isolation`, `conservation`) is a human-readable name for CI output and review diffs.
+
+```typescript
+// @invariant ws-isolation: ∀ call db.* (c) =>
+//   c.where.workspaceId = auth.workspaceId
+
+// @invariant no-secret-leak: ¬ tainted apiKey in call logger.*
+
+// @invariant auth-gate: ∀ call db.*.update (u) =>
+//   ∃ call permissions.check (p) before u where p.action = "write"
+
+// @invariant read-only: ¬ ∃ call db.*.update (u)
+
+// @invariant page-bounded: ∀ call db.*.findMany (f) => f.take = pageSize
+```
+
+**`@ensures`** - a semantic post-condition on the result of an external call. Bridges what TypeScript's type system can't express. Type-level information (field names, types, nullability) is extracted automatically; `@ensures` adds semantic facts like "the returned record matches the query".
+
+```typescript
+const fromAccount = await db.account.findUnique({ where: { id: fromId } });
+// @ensures fromAccount.id = fromId
+// @ensures fromAccount.workspaceId = auth.workspaceId
+```
 
 ## Status
 
@@ -33,24 +88,6 @@ Total: 8 functions
   Sorry:   0
   Coverage: 100.0%
 ```
-
-## The three annotations
-
-```typescript
-// @requires auth.workspaceId > 0
-// @invariant ws-isolation: ∀ call db.* (c) => c.where.workspaceId = auth.workspaceId
-async function lookupProject(auth: Auth, projectId: string) {
-  const project = await db.project.findUnique({
-    where: { id: projectId, workspaceId: auth.workspaceId },
-  });
-  // @ensures project.workspaceId = auth.workspaceId
-  return project;
-}
-```
-
-- **`@requires`** - caller must satisfy this. Becomes a hypothesis in the proof.
-- **`@invariant`** - proved over every execution. Lean kernel checks it.
-- **`@ensures`** - post-condition on an external call result. Bridges what types can't express.
 
 ## Full example
 
@@ -86,15 +123,6 @@ theorem rotateApiKey_no_secret_leak
 The taint analysis walks the AST, tracks that `apiKey` flows to `db.apiKey.update` but never reaches any `logger.*` call. `native_decide` reduces the entire check to `true` at compile time.
 
 ## What you can prove
-
-```
-∀ call db.* (c) => c.where.workspaceId = auth.workspaceId       -- workspace isolation
-¬ tainted secret in call logger.*                               -- no secret leak
-∀ call db.account.update (u) => sum(u.data.balance) = 0         -- conservation
-∃ call permissions.check (p) before u where p.action = "write"  -- auth gate
-¬ ∃ call db.*.update                                            -- read-only
-∀ call db.*.findMany (f) => f.take = pageSize                   -- page bounded
-```
 
 Three proof shapes:
 - **Taint analysis** (syntactic, `native_decide`): does sensitive data reach a call target?
