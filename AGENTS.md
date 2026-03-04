@@ -86,7 +86,8 @@ Key tactics and lemmas for closing `sorry` in extracted files:
 - `forOf_invariant` / `forOf_invariant'` — loop invariants (work on `evalForOf`, NOT on eval's inline foldl)
 - `forOfFold_callsTo` — callsTo invariant for forOf via eval's inline foldl (see below)
 - `ite_covers` — if/then/else coverage
-- `forall_calls_append` / `callsTo_append` — trace composition
+- `forall_calls_append` / `callsTo_append` / `callsTo_nil` — trace composition
+- `callsTo_singleton_call` / `mem_callsTo_singleton` — singleton call trace reasoning
 - `env_stable` / `notMutatedIn` — environment stability across eval
 - `by_taint` — taint analysis goals
 - `by_ordering` — before/inside ordering goals
@@ -95,9 +96,16 @@ Key tactics and lemmas for closing `sorry` in extracted files:
 
 Single-step unfolding lemmas for each `Expr` constructor, all proved by `rfl`. These avoid recursive unfolding (which causes timeouts). Use with `rw` to step through eval one constructor at a time.
 
-Available: `eval_var_eq`, `eval_strLit_eq`, `eval_numLit_eq`, `eval_boolLit_eq`, `eval_none_eq`, `eval_seq_eq`, `eval_letConst_eq`, `eval_letMut_eq`, `eval_assign_eq`, `eval_ite_eq`, `eval_forOf_eq`, `eval_call_eq`, `eval_ret_eq`, `eval_field_eq`, `eval_break_eq`, `eval_throw_eq`, `eval_tryCatch_eq`.
+Available: `eval_var_eq`, `eval_strLit_eq`, `eval_numLit_eq`, `eval_boolLit_eq`, `eval_none_eq`, `eval_seq_eq`, `eval_letConst_eq`, `eval_letMut_eq`, `eval_assign_eq`, `eval_ite_eq`, `eval_forOf_eq`, `eval_call_eq`, `eval_ret_eq`, `eval_field_eq`, `eval_obj_eq`, `eval_break_eq`, `eval_throw_eq`, `eval_tryCatch_eq`.
 
-Also: `mkResult_outcome`/`mkResult_store`/`mkResult_trace` (field access), `lookup_none`/`lookup_some` (lookup reduction).
+Field access: `mkResult_outcome`/`mkResult_store`/`mkResult_trace`. Lookup: `lookup_none`/`lookup_some`.
+
+Derived properties:
+- `eval_var_trace_nil` / `eval_var_store_eq` — var eval produces `[]` trace and preserves store
+- `eval_none_trace` — `Expr.none` produces `[]` trace for any fuel (including 0)
+- `eval_seq_none_trace` — `seq e Expr.none` has same trace as `e` (strips trailing `Expr.none` in seq)
+- `eval_ret_trace` — `ret e` preserves inner trace
+- `eval_field_var` — `.field (.var x) fname` evaluates to `mkResult (.ok v) store []` when `x` is bound to `Val.obj fields` in env (not store) and `fieldLookup fields fname = some v`; requires fuel ≥ 2
 
 ### ForOf CallsTo Infrastructure (`Metatheory/ForOfCallsTo.lean`)
 
@@ -111,8 +119,32 @@ This module bridges the gap:
 - **`forOfFold_callsTo`** — main invariant: given a store invariant `I` and a per-step property `P` on call records, proves all callsTo in the foldl result satisfy `P` and `I` is preserved
 - `eval_forOf_non_arr_trace` — non-array case: forOf trace equals array expr trace
 
-### Proof Pitfall: `let`-inlining with `rw`/`simp`
+### Trace Composition (`Metatheory/TraceComposition.lean`)
 
-When using `rw` with equation lemmas that contain `let` bindings (like `eval_seq_eq`), subsequent `simp` calls may inline the `let`, breaking pattern matching for further `rw` calls. Two approaches:
-1. **Use `simp only` carefully** — avoid `simp` lemmas that inline lets after `rw`
-2. **Use `generalize`** — bind intermediate results to names before `simp` touches them
+- `callsTo_append` — `callsTo (t1 ++ t2) p = callsTo t1 p ++ callsTo t2 p`
+- `forall_calls_append` — lifts per-trace call properties through concatenation
+- `callsTo_nil` — `callsTo [] p = []`
+- `callsTo_singleton_call` — `callsTo [.call cr] p = [cr]` when `matchesPattern cr.target p = true`
+- `mem_callsTo_singleton` — `c ∈ callsTo [.call cr] p → c = cr` (combines singleton + membership). Use as: `have := mem_callsTo_singleton (by native_decide) hc; subst this`
+
+**Note:** When using `native_decide` for `matchesPattern`, the goal must not contain free variables. Bind the `matchesPattern` proof in a separate `have` first.
+
+### Proof Pattern: Stepping Through forOf with `seq _ Expr.none`
+
+Many extracted bodies have the form `seq (forOf x arr body) Expr.none`. The recommended proof pattern:
+
+1. **Strip the seq wrapper:** `rw [show (n:Nat) = m+1 from rfl, eval_seq_none_trace]` — reduces to just the forOf eval's trace
+2. **Unfold forOf:** `rw [eval_forOf_eq]` then `rw [eval_var_eq]` + `rw [h_lookup]` to resolve the array
+3. **Simplify:** `simp only [mkResult_outcome, mkResult_store, mkResult_trace, List.nil_append, List.append_nil]`
+4. **Close with `rfl`:** The inline foldl lambda from `eval_forOf_eq` is definitionally equal to `forOfFoldStep`, so if the conclusion uses `forOfFoldStep`, `rfl` closes the goal
+
+This avoids the `generalize` pitfall (see below) and lets you use imported equation lemmas from EvalEq.lean.
+
+### Proof Pitfall: `generalize` with imported vs local equation lemmas
+
+`generalize expr = x` requires **syntactic** match — it only replaces occurrences that are syntactically identical, not merely definitionally equal. When using imported equation lemmas (e.g., `eval_forOf_eq` from EvalEq.lean), the elaborated lambda terms may differ subtly from those in your theorem statement. `simp` can further change the form via zeta reduction (let-inlining).
+
+**Avoid `generalize` on foldl expressions.** Instead:
+- Use `eval_seq_none_trace` to strip `seq _ Expr.none` wrappers
+- State conclusions using `forOfFoldStep` and close with `rfl` (definitional equality)
+- Use `have : T := expr` to bridge between definitionally-equal forms when needed

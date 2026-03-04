@@ -182,6 +182,31 @@ theorem eval_tryCatch_eq {n : Nat} {env : Env} {store : Store}
        mkResult rh.outcome rh.store (rb.trace ++ rh.trace)
      | _ => rb) := rfl
 
+-- Derived property: Expr.none always produces empty trace regardless of fuel
+
+theorem eval_none_trace {n : Nat} {env : Env} {store : Store} :
+    (eval n env store Expr.none).trace = [] := by
+  cases n with
+  | zero => rfl
+  | succ n => rw [eval_none_eq]; rfl
+
+-- Derived property: seq with Expr.none tail has same trace as first expr
+
+theorem eval_seq_none_trace {n : Nat} {env : Env} {store : Store} {e : Expr} :
+    (eval (n + 1) env store (Expr.seq e Expr.none)).trace =
+    (eval n env store e).trace := by
+  rw [eval_seq_eq]
+  generalize eval n env store e = r1
+  cases r1 with
+  | mk outcome s t =>
+    cases outcome with
+    | ok v =>
+      simp only [mkResult_outcome, mkResult_store, mkResult_trace]
+      rw [eval_none_trace]; simp
+    | error _ => rfl
+    | brk => rfl
+    | returned _ => rfl
+
 -- Derived properties: var eval produces empty trace and preserves store
 
 theorem eval_var_trace_nil {n : Nat} {env : Env} {store : Store} {x : String} :

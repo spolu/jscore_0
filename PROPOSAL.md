@@ -1,4 +1,4 @@
-# `@invariant` — A Verification System for Agent-Generated TypeScript
+# JSCore₀ — A Verification System for Agent-Generated TypeScript
 
 ---
 
