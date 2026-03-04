@@ -44,7 +44,7 @@ Modules imported in dependency order by `jscore/JSCore.lean`:
 - **StringPredicates** — `Val.startsWith'`, `Val.mem'`, `Val.contains'` as Bool functions.
 - **Properties** — `sumOver`, `indexOf`, `allCallsSatisfy`, `noCallsExist`.
 - **Taint** — Purely syntactic analysis: `freeVars`, `collectTaintedBindings`, `taintedBy`, `notTaintedIn`, `callExprsIn`. `notTaintedIn` currently includes a conservative control-flow independence check (`source ∉ freeVars prog`), so it may produce false positives (reject path-safe programs) but should not miss real leaks. Three sets of mutual-recursive helpers for nested inductive traversal.
-- **Metatheory/** — TraceComposition, EnvStability, LoopInvariant, ConditionalCoverage, Composition, TaintSoundness.
+- **Metatheory/** — EvalEq, ForOfCallsTo, TraceComposition, EnvStability, LoopInvariant, ConditionalCoverage, Composition, TaintSoundness.
 - **Tactics** — `trace_simp` (unfolds eval/binop/trace/string defs), `by_taint` (unfolds taint analysis), `by_ordering` (before/inside with omega).
 
 ### Extractor (`extractor/src/`)
@@ -83,9 +83,36 @@ Lean outputs should be generated under `examples/`, collocated with their `.ts` 
 
 Key tactics and lemmas for closing `sorry` in extracted files:
 - `trace_simp` — fully concrete cases
-- `forOf_invariant` / `forOf_invariant'` — loop invariants
+- `forOf_invariant` / `forOf_invariant'` — loop invariants (work on `evalForOf`, NOT on eval's inline foldl)
+- `forOfFold_callsTo` — callsTo invariant for forOf via eval's inline foldl (see below)
 - `ite_covers` — if/then/else coverage
 - `forall_calls_append` / `callsTo_append` — trace composition
 - `env_stable` / `notMutatedIn` — environment stability across eval
 - `by_taint` — taint analysis goals
 - `by_ordering` — before/inside ordering goals
+
+### Eval Equation Lemmas (`Metatheory/EvalEq.lean`)
+
+Single-step unfolding lemmas for each `Expr` constructor, all proved by `rfl`. These avoid recursive unfolding (which causes timeouts). Use with `rw` to step through eval one constructor at a time.
+
+Available: `eval_var_eq`, `eval_strLit_eq`, `eval_numLit_eq`, `eval_boolLit_eq`, `eval_none_eq`, `eval_seq_eq`, `eval_letConst_eq`, `eval_letMut_eq`, `eval_assign_eq`, `eval_ite_eq`, `eval_forOf_eq`, `eval_call_eq`, `eval_ret_eq`, `eval_field_eq`, `eval_break_eq`, `eval_throw_eq`, `eval_tryCatch_eq`.
+
+Also: `mkResult_outcome`/`mkResult_store`/`mkResult_trace` (field access), `lookup_none`/`lookup_some` (lookup reduction).
+
+### ForOf CallsTo Infrastructure (`Metatheory/ForOfCallsTo.lean`)
+
+**Critical insight:** eval's forOf uses inline `List.foldl` (to avoid mutual recursion), while `evalForOf` uses explicit recursion. They differ on **break semantics**: foldl continues after break (converting to `.ok .none`), evalForOf stops. This means `forOf_invariant` (from LoopInvariant.lean) cannot be applied directly to eval output.
+
+This module bridges the gap:
+- `forOfFoldStep` — named version of eval's inline forOf lambda
+- `eval_forOf_foldl_step` — proves the inline lambda equals `forOfFoldStep` (by `rfl`)
+- `forOfFoldStep_ok` / `forOfFoldStep_not_ok` — case-split helpers
+- `foldl_forOfFoldStep_not_ok` — foldl is identity when acc outcome is not ok
+- **`forOfFold_callsTo`** — main invariant: given a store invariant `I` and a per-step property `P` on call records, proves all callsTo in the foldl result satisfy `P` and `I` is preserved
+- `eval_forOf_non_arr_trace` — non-array case: forOf trace equals array expr trace
+
+### Proof Pitfall: `let`-inlining with `rw`/`simp`
+
+When using `rw` with equation lemmas that contain `let` bindings (like `eval_seq_eq`), subsequent `simp` calls may inline the `let`, breaking pattern matching for further `rw` calls. Two approaches:
+1. **Use `simp only` carefully** — avoid `simp` lemmas that inline lets after `rw`
+2. **Use `generalize`** — bind intermediate results to names before `simp` touches them
