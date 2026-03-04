@@ -10,7 +10,7 @@ annotated .ts  -->  extractor (ts-morph)  -->  Lean 4 AST + theorems  -->  lake 
 
 Agents produce code faster than humans can review it. JSCore₀ replaces code review with three lightweight comment annotations that capture what the code should do. The agent generates both the implementation and the proof. If the proof checks, the code matches the spec. If it doesn't, `lake build` fails. No human reads the implementation.
 
-All proofs in `examples/` were generated entirely by coding agents (Claude). No human wrote Lean. Developers don't need to know anything about formal methods, Lean, or proof theory. They write TypeScript, add annotations in plain English-like syntax, and the toolchain handles the rest.
+All proofs in `examples/` were generated entirely by coding agents (Claude). No human wrote Lean. Developers don't need to know anything about formal methods, Lean, or proof theory. They write TypeScript. The agent proposes annotations and proves them. The human reviews annotations, challenges them informally ("what about the case where..."), and iterates with the agent until the spec is right. The annotations follow a small formal grammar but are designed to be readable without training.
 
 This is a proof of concept. Taint and nonexistence proofs close instantly (`native_decide`), but runtime property proofs can take a coding agent up to an hour of iteration against the Lean kernel. Not practical yet, but the trajectory is clear: as models get better at Lean, the loop tightens. This project exists to demonstrate that the approach works end-to-end today, and that formal verification can apply to normal codebases without any formal methods expertise.
 
