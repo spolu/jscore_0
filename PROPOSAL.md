@@ -172,7 +172,7 @@ order :=
   | after <call-binding>                     -- this call appears later in trace
   | where <call-binding> inside <call-binding>  -- call nested within transaction
 
-pattern := "db.*" | "db.user.findMany" | "logger.*" ...  -- string prefix matching
+pattern := "db.*" | "db.user.findMany" | "logger.*" ...  -- segment-based wildcard matching
 
 expr :=
   | <param>                                  -- function parameter: auth
@@ -332,7 +332,7 @@ structure Result where
   store   : Store
   trace   : List TraceEntry
 
-def eval : Env → Store → Expr → Result
+def eval (fuel : Nat) (env : Env) (store : Store) (e : Expr) : Result
 ```
 
 All verification is about propositions over traces. Most trace queries operate over `CallRecord`s (extracted from `TraceEntry.call` entries); `scopeEnd` entries are only used by the `inside` predicate for transaction scoping.
@@ -343,10 +343,10 @@ All verification is about propositions over traces. Most trace queries operate o
 
 ```lean
 | .letConst x e body =>
-  let r1 := eval env store e
+  let r1 := eval fuel env store e
   match r1.outcome with
-  | .ok v => let r2 := eval (env.set x v) r1.store body
-              { r2 with trace := r1.trace ++ r2.trace }
+  | .ok v => let r2 := eval fuel (env.set x v) r1.store body
+              mkResult r2.outcome r2.store (r1.trace ++ r2.trace)
   | _ => r1
 ```
 
@@ -354,53 +354,51 @@ All verification is about propositions over traces. Most trace queries operate o
 
 ```lean
 | .letMut x e body =>
-  let r1 := eval env store e
+  let r1 := eval fuel env store e
   match r1.outcome with
-  | .ok v => let r2 := eval env (r1.store.set x v) body
-              { r2 with trace := r1.trace ++ r2.trace }
+  | .ok v => let r2 := eval fuel env (r1.store.set x v) body
+              mkResult r2.outcome r2.store (r1.trace ++ r2.trace)
   | _ => r1
 ```
 
-**`call`** — records to trace, binds result. External calls can either succeed or throw:
+**`call`** — evaluates arguments, records to trace, binds result as `Val.none`, continues with body:
 
 ```lean
 | .call target namedArgs resultBinder body =>
-  let (argVals, argTrace) := evalNamedArgs env store namedArgs
+  let (argVals, argStore, argTrace) := evalNamedArgs fuel env store namedArgs
   let cr := { target, args := argVals, resultId := resultBinder }
-  -- Two cases: call succeeds or call throws
-  -- Case 1: success — resultVal constrained by @ensures + TS type
-  let r := eval (env.set resultBinder resultVal) store body
-  { r with trace := argTrace ++ [cr] ++ r.trace }
-  -- Case 2: call throws — trace records up to the failed call, body never executes
-  { outcome := .error callError, store, trace := argTrace ++ [cr] }
+  let callTrace := argTrace ++ [.call cr]
+  let resultVal := Val.none
+  let r := eval fuel (env.set resultBinder resultVal) argStore body
+  mkResult r.outcome r.store (callTrace ++ r.trace)
 ```
 
-Proofs must hold for both cases. In the success case, `resultVal` is universally quantified over all values satisfying the `@ensures` predicates and TypeScript return type. In the failure case, the body never executes — the trace contains only the calls evaluated before and including the failed call. This means invariants are proved over the trace *as actually produced*, including partial traces from call failures. An invariant like `∀ call db.*.update (u) => ...` holds vacuously if the update call never executes due to an earlier failure — the guarantee is: every call that *does appear* in the trace satisfies the property.
+In the formalization, call results are bound as `Val.none` — external call semantics are not modeled. The `@ensures` annotations and TypeScript type predicates appear as hypotheses in the theorem statement, universally quantified over possible result values. Invariants are proved over the trace *as actually produced*. An invariant like `∀ call db.*.update (u) => ...` holds vacuously if the update call never executes due to an earlier failure — the guarantee is: every call that *does appear* in the trace satisfies the property.
 
 **`ite`** — both branches produce separate traces; only one executes:
 
 ```lean
 | .ite cond thn els =>
-  let rc := eval env store cond
+  let rc := eval fuel env store cond
   match rc.outcome with
-  | .ok (.bool true)  => let r := eval env rc.store thn
-                          { r with trace := rc.trace ++ r.trace }
-  | .ok (.bool false) => let r := eval env rc.store els
-                          { r with trace := rc.trace ++ r.trace }
+  | .ok (.bool true)  => let r := eval fuel env rc.store thn
+                          mkResult r.outcome r.store (rc.trace ++ r.trace)
+  | .ok (.bool false) => let r := eval fuel env rc.store els
+                          mkResult r.outcome r.store (rc.trace ++ r.trace)
   | _ => ...
 ```
 
 **`forOf`** — trace is concatenation of all iteration traces. The loop variable goes into `Env` (immutable per-iteration binding, matching `for (const x of ...)`):
 
 ```lean
-def evalForOf (env : Env) (store : Store) (x : String)
-    (elems : List Val) (body : Expr) (prefix : List CallRecord) : Result :=
+def evalForOf (fuel : Nat) (env : Env) (store : Store) (x : String)
+    (elems : List Val) (body : Expr) (pfx : List TraceEntry) : Result :=
   elems.foldl (fun acc elem =>
     match acc.outcome with
-    | .ok _ => let r := eval (env.set x elem) acc.store body
-                { r with trace := acc.trace ++ r.trace }
+    | .ok _ => let r := eval fuel (env.set x elem) acc.store body
+                mkResult r.outcome r.store (acc.trace ++ r.trace)
     | _ => acc
-  ) { outcome := .ok .none, store, trace := prefix }
+  ) (mkResult (.ok .none) store pfx)
 ```
 
 ### Desugaring: TypeScript → JSCore₀
@@ -458,30 +456,41 @@ The extractor is a TypeScript compiler plugin (~1000 LOC). Straightforward synta
 ### Trace queries
 
 ```lean
--- All calls whose target starts with pattern
-def callsTo (trace : List CallRecord) (pattern : String) : List CallRecord :=
-  trace.filter (fun c => c.target.startsWith pattern)
+-- All calls whose target matches pattern (segment-based wildcards)
+def callsTo (trace : List TraceEntry) (pattern : String) : List CallRecord :=
+  (extractCalls trace).filter (fun c => matchesPattern c.target pattern)
 
 -- Value of a named argument, including nested paths ("where.workspaceId")
 def argAtPath (c : CallRecord) (path : String) : Option Val := ...
 
+-- Segment-based wildcard matching: "db.*" matches "db.projects.findMany"
+def matchesPattern (target : String) (pattern : String) : Bool :=
+  go (target.splitOn ".") (pattern.splitOn ".")
+where
+  go : List String → List String → Bool
+  | _ :: _, ["*"] => true
+  | t :: ts, p :: ps => (p == "*" || t == p) && go ts ps
+  | [], [] => true
+  | _, _ => false
+
 -- Ordering: c1 appears before c2 in the trace
-def before (trace : List CallRecord) (c1 c2 : CallRecord) : Prop :=
-  ∃ i j, trace[i]? = some c1 ∧ trace[j]? = some c2 ∧ i < j
+def before (trace : List TraceEntry) (c1 c2 : CallRecord) : Prop :=
+  ∃ i j, trace.get? i = some (.call c1) ∧ trace.get? j = some (.call c2) ∧ i < j
 
--- String predicates
-def Val.startsWith : Val → Val → Prop
+-- String predicates (Bool functions, not Prop)
+def Val.startsWith' (v1 v2 : Val) : Bool :=
+  match v1, v2 with
   | .str a, .str b => b.isPrefixOf a
-  | _, _ => False
+  | _, _ => false
 
-def Val.mem : Val → List Val → Prop := ...
-def Val.contains : Val → String → Prop := ...
+def Val.mem' : Val → List Val → Bool := ...
+def Val.contains' : Val → String → Bool := ...
 
 -- Aggregation: sum over a numeric field across matching calls.
 -- Returns Option Int — none if any matching call lacks the field.
 -- This forces proofs to establish that all matching calls have the
 -- expected numeric field; a malformed call cannot be silently skipped.
-def sumOver (trace : List CallRecord) (pattern : String)
+def sumOver (trace : List TraceEntry) (pattern : String)
     (path : String) : Option Int :=
   (callsTo trace pattern).foldlM (fun acc c =>
     match argAtPath c path with
@@ -493,10 +502,12 @@ def sumOver (trace : List CallRecord) (pattern : String)
 -- db.$transaction). The extractor emits a scopeEnd record when the
 -- callback returns. "inside" means c1 appears between c2 and c2's
 -- corresponding scopeEnd in the trace.
-def inside (trace : List CallRecord) (c1 c2 : CallRecord) : Prop :=
-  c2.target.startsWith "db.$transaction" ∧
-  ∃ i j k, trace[i]? = some c2 ∧ trace[j]? = some c1 ∧
-    trace[k]? = some (scopeEnd c2) ∧ i < j ∧ j < k
+def inside (trace : List TraceEntry) (c1 c2 : CallRecord) : Prop :=
+  matchesPattern c2.target "db.$transaction*" ∧
+  ∃ i j k, trace.get? i = some (.call c2) ∧
+    trace.get? j = some (.call c1) ∧
+    trace.get? k = some (.scopeEnd c2) ∧
+    i < j ∧ j < k
 
 -- List position
 def indexOf (v : Val) (vs : List Val) : Option Nat :=
@@ -507,15 +518,19 @@ def indexOf (v : Val) (vs : List Val) : Option Nat :=
 
 ```lean
 -- Does expression e transitively depend on binding source?
--- Computed over the program AST — no runtime component.
-def taintedBy (prog : Expr) (source : String) : Expr → Prop :=
-  fun e => source ∈ transitiveUsedBindings prog e
+-- Computed over the program AST — no runtime component. Returns Bool.
+def taintedBy (prog : Expr) (source : String) (e : Expr) : Bool :=
+  let taintedBindings := source :: collectTaintedBindings source prog
+  (freeVars e).any (· ∈ taintedBindings)
 
--- No call matching pattern has any argument that depends on source
-def notTaintedIn (prog : Expr) (source pattern : String) : Prop :=
-  ∀ callExpr ∈ callExprsIn prog pattern,
-    ∀ (_, argExpr) ∈ callExpr.namedArgs,
-      ¬ taintedBy prog source argExpr
+-- No call matching pattern has any argument that depends on source.
+-- Includes conservative control-flow independence check. Returns Bool.
+def notTaintedIn (prog : Expr) (source pattern : String) : Bool :=
+  let calls := callExprsIn prog pattern
+  let argsIndependent := calls.all fun ci =>
+    ci.namedArgs.all fun (_, argExpr) => !taintedBy prog source argExpr
+  let controlIndependent := decide (source ∉ freeVars prog)
+  controlIndependent && argsIndependent
 ```
 
 Taint is purely static — it walks the AST and follows binding chains. Sound for `letConst` (immutable) bindings, conservative for `letMut` (may over-approximate).
@@ -535,11 +550,11 @@ The key taint soundness theorem:
 
 ```lean
 theorem taint_soundness (prog : Expr) (source pattern : String)
-    (h : notTaintedIn prog source pattern) :
-    ∀ env env' store,
+    (h : notTaintedIn prog source pattern = true) :
+    ∀ fuel env env' store,
       (∀ x ≠ source, env x = env' x) →   -- env and env' differ only on source
-      callsTo (eval env store prog).trace pattern =
-      callsTo (eval env' store prog).trace pattern
+      callsTo (eval fuel env store prog).trace pattern =
+      callsTo (eval fuel env' store prog).trace pattern
 -- Changing source's value doesn't change any matching call's arguments
 ```
 
@@ -563,17 +578,19 @@ theorem invariant_composition
 
 ## Metatheory
 
-Five theorems, proved once in Lean 4, used by all user proofs:
+Core theorems, proved once in Lean 4, used by all user proofs:
 
 **1. Determinism.** `eval` is a Lean function — determinism is automatic.
 
 **2. Trace compositionality.**
 
 ```lean
-theorem seq_trace (env : Env) (store : Store) (e1 e2 : Expr) :
-    (eval env store (.seq e1 e2)).trace =
-      (eval env store e1).trace ++
-      (eval env (eval env store e1).store e2).trace
+theorem seq_trace (fuel : Nat) (env : Env) (store : Store) (e1 e2 : Expr) :
+    (eval (fuel + 1) env store (.seq e1 e2)).trace =
+      match (eval fuel env store e1).outcome with
+      | .ok _ => (eval fuel env store e1).trace ++
+          (eval fuel env (eval fuel env store e1).store e2).trace
+      | _ => (eval fuel env store e1).trace
 ```
 
 **3. Env stability.** Values in `Env` (parameters, `const` bindings) are never affected by `Store` mutations. By construction, `letConst` names only enter `Env` and `letMut`/`assign` names only enter `Store` — the namespaces are disjoint. This makes workspace isolation proofs trivially stable through loops — `auth.workspaceId` is in `Env`; loop iterations mutate `Store`.
@@ -586,37 +603,35 @@ theorem env_stable (env : Env) (store store' : Store) (x : String)
     lookup env store x = lookup env store' x  -- = some v
 ```
 
-The preconditions `store x = none` hold by construction for any `letConst`-bound or parameter-bound name — the evaluator never places such names in `Store`. A companion lemma establishes this invariant over evaluation:
-
-```lean
-theorem eval_preserves_store_disjointness (env : Env) (store : Store) (e : Expr)
-    (x : String) (h : env x = some v) (h_s : store x = none) :
-    (eval env store e).store x = none
-```
+The preconditions `store x = none` hold by construction for any `letConst`-bound or parameter-bound name — the evaluator never places such names in `Store`.
 
 **4. Loop invariant principle.**
 
 ```lean
-theorem forOf_invariant (env : Env) (store : Store)
+theorem forOf_invariant (fuel : Nat) (env : Env) (store : Store)
     (x : String) (elems : List Val) (body : Expr)
-    (P : CallRecord → Prop) (I : Store → Prop)
+    (P : TraceEntry → Prop) (I : Store → Prop)
+    (pfx : List TraceEntry)
+    (h_pfx : ∀ e ∈ pfx, P e)
     (h_init : I store)
     (h_step : ∀ elem store_i, I store_i →
-      let r := eval (env.set x elem) store_i body
-      I r.store ∧ ∀ c ∈ r.trace, P c) :
-    (∀ c ∈ (evalForOf env store x elems body []).trace, P c) ∧
-    I (evalForOf env store x elems body []).store
+      let r := eval fuel (env.set x elem) store_i body
+      I r.store ∧ ∀ e ∈ r.trace, P e) :
+    let result := evalForOf fuel env store x elems body pfx
+    (∀ e ∈ result.trace, P e) ∧ I result.store
 ```
 
 **5. Conditional coverage.** If the condition evaluates to a boolean and a property holds on both branches, it holds on the conditional. When the condition doesn't evaluate to a boolean (error or non-boolean value), evaluation produces an empty trace — the property holds vacuously.
 
 ```lean
-theorem ite_covers (env : Env) (store : Store) (cond thn els : Expr)
-    (P : List CallRecord → Prop)
-    (h_cond : ∃ b, (eval env store cond).outcome = .ok (.bool b))
-    (h_true  : (eval env store cond).outcome = .ok (.bool true)  → P (eval env store thn).trace)
-    (h_false : (eval env store cond).outcome = .ok (.bool false) → P (eval env store els).trace) :
-    P (eval env store (.ite cond thn els)).trace
+theorem ite_covers (fuel : Nat) (env : Env) (store : Store) (cond thn els : Expr)
+    (P : List TraceEntry → Prop)
+    (h_cond : ∃ b, (eval fuel env store cond).outcome = .ok (.bool b))
+    (h_true  : (eval fuel env store cond).outcome = .ok (.bool true)  →
+      P (eval fuel env store thn).trace)
+    (h_false : (eval fuel env store cond).outcome = .ok (.bool false) →
+      P (eval fuel env store els).trace) :
+    P (eval fuel env store (.ite cond thn els)).trace
 ```
 
 This last theorem is what makes guard reasoning work: the `if (amount <= 0) throw` pattern means the "not thrown" branch has `amount > 0` as a hypothesis, available for any invariant proof that needs it. The `h_cond` precondition is typically discharged by `trace_simp` from the comparison's type.
@@ -628,13 +643,12 @@ This last theorem is what makes guard reasoning work: the `if (amount <= 0) thro
 Agents use these to close proof goals mechanically:
 
 - **`trace_simp`** — unfolds `eval`, simplifies the trace, reduces invariant checks to concrete value equality goals. Handles most data-flow invariants automatically via `simp` + `omega`.
-- **`loop_inv I`** — applies `forOf_invariant` with store invariant `I`; reduces to per-iteration obligations which `trace_simp` typically closes.
-- **`by_taint`** — walks the AST statically and proves taint-freedom by `decide`.
-- **`by_ordering`** — computes trace indices and proves `before`/`after` properties.
+- **`by_taint`** — unfolds taint analysis definitions and proves taint-freedom by `native_decide`.
+- **`by_ordering`** — proves `before`/`inside` ordering properties with `omega`.
 
 ### Why agents can write these proofs
 
-This system assumes agents can generate Lean 4 proofs — a strong assumption, but a deliberately engineered one. These are not open-ended mathematical proofs. They are proofs about concrete program terms in a 7-constructor calculus, and they follow a small number of repeating patterns: unfold the trace, check each call record, appeal to env stability through a loop, or walk the AST for taint-freedom. The custom tactics above are designed to collapse most proof goals into one or two tactic invocations. In practice, a workspace-isolation proof for a function with no loops is just `by trace_simp`; with a loop, it's `by loop_inv (fun s => True) <;> trace_simp`. The agent doesn't need to invent proof strategies — it needs to recognize which pattern applies and supply the right store invariant. When a proof fails, Lean returns a precise goal state showing exactly what remains unproved, giving the agent a concrete target to fix rather than a vague error. And critically, wrong proofs are free — they simply don't check. The agent can iterate aggressively because the kernel is the judge, not a human reviewer.
+This system assumes agents can generate Lean 4 proofs — a strong assumption, but a deliberately engineered one. These are not open-ended mathematical proofs. They are proofs about concrete program terms in a 26-constructor calculus, and they follow a small number of repeating patterns: step through eval with equation lemmas, check each call record, appeal to env stability through a loop, or walk the AST for taint-freedom. A library of shared metatheory lemmas (eval equation lemmas, trace composition, forOf call invariants) collapses most proof goals into a few `rw` + `simp` invocations. The agent doesn't need to invent proof strategies — it needs to recognize which pattern applies and supply the right store invariant. When a proof fails, Lean returns a precise goal state showing exactly what remains unproved, giving the agent a concrete target to fix rather than a vague error. And critically, wrong proofs are free — they simply don't check. The agent can iterate aggressively because the kernel is the judge, not a human reviewer.
 
 ---
 
@@ -651,12 +665,14 @@ jscore/
 │   ├── Taint.lean             -- taintedBy, notTaintedIn      (~200 LOC)
 │   ├── StringPredicates.lean  -- startsWith, contains, mem   (~80 LOC)
 │   ├── Metatheory/
-│   │   ├── TraceComposition.lean                              (~150 LOC)
-│   │   ├── EnvStability.lean                                  (~100 LOC)
-│   │   ├── LoopInvariant.lean                                 (~200 LOC)
-│   │   ├── ConditionalCoverage.lean                           (~120 LOC)
-│   │   ├── Composition.lean                                   (~250 LOC)
-│   │   └── TaintSoundness.lean                                (~200 LOC)
+│   │   ├── EvalEq.lean              -- equation lemmas         (~250 LOC)
+│   │   ├── TraceComposition.lean                              (~90 LOC)
+│   │   ├── ForOfCallsTo.lean        -- forOf foldl bridge     (~160 LOC)
+│   │   ├── EnvStability.lean                                  (~50 LOC)
+│   │   ├── LoopInvariant.lean                                 (~60 LOC)
+│   │   ├── ConditionalCoverage.lean                           (~30 LOC)
+│   │   ├── Composition.lean                                   (~40 LOC)
+│   │   └── TaintSoundness.lean                                (~680 LOC)
 │   └── Tactics.lean                                           (~400 LOC)
 ├── JSCore.lean
 └── lakefile.lean
